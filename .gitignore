@@ -1,0 +1,13 @@
+/build/
+
+.vscode/
+
+# Generic CMake / Ninja output
+CMakeFiles/
+CMakeCache.txt
+build.ninja
+.ninja_*
+compile_commands.json
+
+/wasm/*.a
+/wasm/*.map

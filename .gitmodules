@@ -1,0 +1,4 @@
+[submodule "external/multigauge-core"]
+	path = external/multigauge-core
+	url = https://github.com/bluesqqq/multigauge-core.git
+	branch = dev
