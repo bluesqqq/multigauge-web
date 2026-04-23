@@ -1,4 +1,4 @@
-import { createApiHelpers } from "./apiHelpers.js";
+import { createApiHelpers } from "../apiHelpers.js";
 
 export function createPreviewApi(Module) {
     const { callJson, asUInt, asString } = createApiHelpers(Module);

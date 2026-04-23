@@ -1,7 +1,5 @@
-#include <multigauge/AssetManager.h>
 #include <multigauge/App.h>
 
-#include "platform/GraphicsContextCanvas.h"
 #include "platform/FileSystemEmscripten.h"
 #include "platform/LoggerWebConsole.h"
 #include "platform/TimeWeb.h"
@@ -13,10 +11,9 @@ namespace mg {
     LoggerWebConsole logger;
     FileSystemEmscripten fileSystem;
     TimeWeb clock;
-    GraphicsContextCanvas context("c");
 }
 
-Platform plat{ mg::context, mg::fileSystem, mg::clock, &mg::logger };
+Platform plat{ mg::fileSystem, mg::clock, &mg::logger };
 
 static uint64_t lastMs = 0;
 
@@ -30,9 +27,7 @@ static void tick() {
 }
 
 int main() {
-    setPlatform(plat);
-
-    if (!initPlatform()) return 1;
+    if (!mg::init(plat)) return 1;
 
     emscripten_set_main_loop(tick, 0, 1);
     return 0;

@@ -1,11 +1,9 @@
 import { createApiHelpers } from "../apiHelpers.js";
 
 export function createEditorApi(Module) {
-    const { callVoid, callJson, asInt, asUInt, asNumber, asString } = createApiHelpers(Module);
+    const { callJson, asInt, asUInt, asNumber, asString } = createApiHelpers(Module);
 
     return {
-        attach() { callVoid("mg_editor_attach"); },
-
         // VIEWS
         createView(canvasId, gaugePath = "", name = "") { return callJson("mg_editor_create_view", ["string", "string", "string"], [asString(canvasId), asString(gaugePath), asString(name)], { ok: false, error: "BadResponse" }); },
         listViews() { return callJson("mg_editor_list_views", [], [], []); },

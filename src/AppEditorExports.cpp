@@ -11,17 +11,12 @@
 #include <rapidjson/writer.h>
 
 #include <multigauge/App.h>
-#include <multigauge/GaugeView.h>
 #include <multigauge/Platform.h>
 #include <multigauge/editor/GaugeEditor.h>
 #include <multigauge/gauge/GaugeFace.h>
 
 
 #include "platform/GraphicsContextCanvas.h"
-
-namespace mg {
-    extern GraphicsContextCanvas context;
-}
 
 namespace {
     struct EditorViewBinding {
@@ -34,7 +29,8 @@ namespace {
         int renderHeight = 240;
         GraphicsContextCanvas* context = nullptr;
         std::unique_ptr<GraphicsContextCanvas> ownedContext;
-        GaugeView* view = nullptr;
+        mg::ContextId contextId = 0;
+        std::unique_ptr<GaugeFace> face;
         std::unique_ptr<GaugeEditor> editor;
     };
 
@@ -81,34 +77,6 @@ namespace {
 
         GaugeEditor* editor = active_editor();
         return editor ? *editor : fallbackEditor;
-    }
-
-    bool has_binding_for_view(const GaugeView* view) {
-        if (!view) return false;
-        for (const auto& binding : g_bindings) {
-            if (binding && binding->view == view) return true;
-        }
-        return false;
-    }
-
-    void attach_primary_view_if_needed() {
-        GaugeView* primaryView = mg::getPrimaryView();
-        if (!primaryView || has_binding_for_view(primaryView)) return;
-
-        auto binding = std::make_unique<EditorViewBinding>();
-        binding->id = g_nextViewId++;
-        binding->name = "Face 1";
-        binding->canvasId = "c";
-        binding->documentPath = make_document_path(binding->id);
-        binding->renderWidth = 240;
-        binding->renderHeight = 240;
-        binding->context = &mg::context;
-        binding->context->resize(binding->renderWidth, binding->renderHeight);
-        binding->view = primaryView;
-        binding->editor = std::make_unique<GaugeEditor>(primaryView->getGaugeFace());
-        write_binding_document(*binding);
-        g_activeViewId = binding->id;
-        g_bindings.push_back(std::move(binding));
     }
 
     rapidjson::Value make_view_json(const EditorViewBinding& binding, rapidjson::Document::AllocatorType& allocator) {
@@ -338,26 +306,18 @@ namespace {
     }
 
     bool reload_binding_view(EditorViewBinding& binding) {
-        if (!binding.view) return false;
+        if (!binding.context) return false;
         if (!write_binding_document(binding)) return false;
-        if (!binding.view->load(binding.documentPath.c_str())) return false;
-        if (binding.editor) {
-            binding.editor->setFace(binding.view->getGaugeFace());
-        } else {
-            binding.editor = std::make_unique<GaugeEditor>(binding.view->getGaugeFace());
-        }
-        return true;
+        return mg::showGauge(binding.contextId, binding.documentPath.c_str());
     }
 
     const char* get_document_assets_impl() {
-        attach_primary_view_if_needed();
         EditorViewBinding* binding = active_binding();
         g_ret = binding ? binding->assetsJson : "[]";
         return g_ret.c_str();
     }
 
     const char* set_document_assets_text_impl(const std::string& jsonText) {
-        attach_primary_view_if_needed();
         EditorViewBinding* binding = active_binding();
         if (!binding) {
             g_ret = R"({"ok":false,"error":"ViewNotFound"})";
@@ -400,7 +360,6 @@ namespace {
     }
 
     const char* reload_view_impl() {
-        attach_primary_view_if_needed();
         EditorViewBinding* binding = active_binding();
         if (!binding) {
             g_ret = R"({"ok":false,"error":"ViewNotFound"})";
@@ -417,7 +376,6 @@ namespace {
     }
 
     const char* export_document_impl() {
-        attach_primary_view_if_needed();
         EditorViewBinding* binding = active_binding();
         if (!binding) {
             g_ret.clear();
@@ -457,8 +415,16 @@ namespace {
             return g_ret.c_str();
         }
 
-        binding->view = &mg::createView(*binding->context, binding->documentPath.c_str());
-        binding->editor = std::make_unique<GaugeEditor>(binding->view->getGaugeFace());
+        binding->contextId = mg::addContext(*binding->context);
+        binding->face = std::make_unique<GaugeFace>();
+        binding->editor = std::make_unique<GaugeEditor>(*binding->face);
+        binding->editor->loadFace(rootJson);
+
+        if (!mg::showGauge(binding->contextId, binding->documentPath.c_str())) {
+            mg::removeContext(binding->contextId);
+            g_ret = R"({"ok":false,"error":"DocumentLoadFailed"})";
+            return g_ret.c_str();
+        }
 
         const EditorViewBinding* bindingPtr = binding.get();
         g_bindings.push_back(std::move(binding));
@@ -469,15 +435,11 @@ namespace {
     }
 
     const char* remove_view_impl(std::uint32_t id) {
-        attach_primary_view_if_needed();
-
         for (auto it = g_bindings.begin(); it != g_bindings.end(); ++it) {
             auto& binding = *it;
             if (!binding || binding->id != id) continue;
 
-            if (binding->view) {
-                mg::removeView(*binding->view);
-            }
+            mg::removeContext(binding->contextId);
             if (!binding->documentPath.empty()) {
                 FS().remove(binding->documentPath);
             }
@@ -499,7 +461,6 @@ namespace {
     }
 
     const char* set_view_render_size_impl(std::uint32_t id, int width, int height) {
-        attach_primary_view_if_needed();
         EditorViewBinding* binding = find_binding(id);
         if (!binding || !binding->context) {
             g_ret = R"({"ok":false,"error":"ViewNotFound"})";
@@ -523,11 +484,6 @@ namespace {
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
-void mg_editor_attach() {
-    attach_primary_view_if_needed();
-}
-
-EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_create_view(const char* canvasId, const char* gaugePath, const char* name) {
     try {
         return create_view_impl(canvasId, gaugePath, name);
@@ -541,7 +497,6 @@ const char* mg_editor_create_view(const char* canvasId, const char* gaugePath, c
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_list_views() {
     try {
-        attach_primary_view_if_needed();
         g_ret = make_views_json();
         return g_ret.c_str();
     } catch (const std::exception& error) {
@@ -554,7 +509,6 @@ const char* mg_editor_list_views() {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_select_view(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         EditorViewBinding* binding = find_binding(id);
         if (!binding) {
             g_ret = R"({"ok":false,"error":"ViewNotFound"})";
@@ -618,7 +572,6 @@ const char* mg_preview_remove_view(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_list_tree() {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = "[]";
@@ -657,7 +610,6 @@ const char* mg_editor_list_values() {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_get_properties(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = "[]";
@@ -674,7 +626,6 @@ const char* mg_editor_get_properties(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_get_history_state() {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = make_history_state_json();
@@ -735,7 +686,6 @@ const char* mg_editor_reload_view() {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_get_property_node(std::uint32_t id, const char* path) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor || !path) {
             g_ret = "{}";
@@ -752,7 +702,6 @@ const char* mg_editor_get_property_node(std::uint32_t id, const char* path) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_undo() {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -771,7 +720,6 @@ const char* mg_editor_undo() {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_redo() {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -790,7 +738,6 @@ const char* mg_editor_redo() {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_set_property(std::uint32_t id, const char* path, const char* jsonValue) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -814,7 +761,6 @@ const char* mg_editor_set_property(std::uint32_t id, const char* path, const cha
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_add_element(std::uint32_t parentId, const char* type) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -838,7 +784,6 @@ const char* mg_editor_add_element(std::uint32_t parentId, const char* type) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_insert_element(std::uint32_t parentId, const char* type, int index) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -862,7 +807,6 @@ const char* mg_editor_insert_element(std::uint32_t parentId, const char* type, i
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_move_element(std::uint32_t id, std::uint32_t newParentId, int index) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -881,7 +825,6 @@ const char* mg_editor_move_element(std::uint32_t id, std::uint32_t newParentId, 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_remove_element(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -900,7 +843,6 @@ const char* mg_editor_remove_element(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_get_element_json(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = "{}";
@@ -919,7 +861,6 @@ const char* mg_editor_get_element_json(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_insert_element_json(std::uint32_t parentId, const char* jsonValue, int index) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -943,7 +884,6 @@ const char* mg_editor_insert_element_json(std::uint32_t parentId, const char* js
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_replace_element_json(std::uint32_t id, const char* jsonValue) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -967,7 +907,6 @@ const char* mg_editor_replace_element_json(std::uint32_t id, const char* jsonVal
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_bring_forward(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -986,7 +925,6 @@ const char* mg_editor_bring_forward(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_bring_to_front(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -1005,7 +943,6 @@ const char* mg_editor_bring_to_front(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_send_backward(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -1024,7 +961,6 @@ const char* mg_editor_send_backward(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_send_to_back(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -1043,7 +979,6 @@ const char* mg_editor_send_to_back(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_reorder_element(std::uint32_t id, int index) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -1062,7 +997,6 @@ const char* mg_editor_reorder_element(std::uint32_t id, int index) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_copy_element(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -1081,7 +1015,6 @@ const char* mg_editor_copy_element(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_paste_into_element(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -1100,7 +1033,6 @@ const char* mg_editor_paste_into_element(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_paste_to_replace_element(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -1119,7 +1051,6 @@ const char* mg_editor_paste_to_replace_element(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_duplicate_element(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -1138,7 +1069,6 @@ const char* mg_editor_duplicate_element(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_get_element_bounds(std::uint32_t id) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
@@ -1157,7 +1087,6 @@ const char* mg_editor_get_element_bounds(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_list_element_bounds() {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = "[]";
@@ -1176,7 +1105,6 @@ const char* mg_editor_list_element_bounds() {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_hit_test(float x, float y, int index) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = "0";
@@ -1195,7 +1123,6 @@ const char* mg_editor_hit_test(float x, float y, int index) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_hit_test_all(float x, float y) {
     try {
-        attach_primary_view_if_needed();
         GaugeEditor* editor = active_editor();
         if (!editor) {
             g_ret = "[]";
