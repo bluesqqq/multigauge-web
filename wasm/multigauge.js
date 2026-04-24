@@ -5064,7 +5064,6 @@ function mg_console_log(level,cstr) { const s = UTF8ToString(cstr); if (level ==
 
 // Imports from the Wasm binary.
 var _main = Module['_main'] = makeInvalidEarlyAccess('_main');
-var _mg_editor_attach = Module['_mg_editor_attach'] = makeInvalidEarlyAccess('_mg_editor_attach');
 var _mg_editor_create_view = Module['_mg_editor_create_view'] = makeInvalidEarlyAccess('_mg_editor_create_view');
 var _mg_editor_list_views = Module['_mg_editor_list_views'] = makeInvalidEarlyAccess('_mg_editor_list_views');
 var _mg_editor_select_view = Module['_mg_editor_select_view'] = makeInvalidEarlyAccess('_mg_editor_select_view');
@@ -5123,7 +5122,6 @@ var wasmTable = makeInvalidEarlyAccess('wasmTable');
 
 function assignWasmExports(wasmExports) {
   assert(typeof wasmExports['main'] != 'undefined', 'missing Wasm export: main');
-  assert(typeof wasmExports['mg_editor_attach'] != 'undefined', 'missing Wasm export: mg_editor_attach');
   assert(typeof wasmExports['mg_editor_create_view'] != 'undefined', 'missing Wasm export: mg_editor_create_view');
   assert(typeof wasmExports['mg_editor_list_views'] != 'undefined', 'missing Wasm export: mg_editor_list_views');
   assert(typeof wasmExports['mg_editor_select_view'] != 'undefined', 'missing Wasm export: mg_editor_select_view');
@@ -5178,7 +5176,6 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports['memory'] != 'undefined', 'missing Wasm export: memory');
   assert(typeof wasmExports['__indirect_function_table'] != 'undefined', 'missing Wasm export: __indirect_function_table');
   _main = Module['_main'] = createExportWrapper('main', 2);
-  _mg_editor_attach = Module['_mg_editor_attach'] = createExportWrapper('mg_editor_attach', 0);
   _mg_editor_create_view = Module['_mg_editor_create_view'] = createExportWrapper('mg_editor_create_view', 3);
   _mg_editor_list_views = Module['_mg_editor_list_views'] = createExportWrapper('mg_editor_list_views', 0);
   _mg_editor_select_view = Module['_mg_editor_select_view'] = createExportWrapper('mg_editor_select_view', 1);
