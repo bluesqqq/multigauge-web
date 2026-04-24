@@ -14,6 +14,7 @@
 #include <multigauge/Platform.h>
 #include <multigauge/editor/GaugeEditor.h>
 #include <multigauge/gauge/GaugeFace.h>
+#include <multigauge/graphics/Graphics.h>
 
 
 #include "platform/GraphicsContextCanvas.h"
@@ -43,6 +44,14 @@ namespace {
     std::string make_document_path(std::uint32_t id);
     bool write_binding_document(EditorViewBinding& binding, const char* rootJsonOverride = nullptr);
 
+    bool layout_binding_face(EditorViewBinding& binding) {
+        if (!binding.face || !binding.context) return false;
+
+        Graphics graphics(binding.context);
+        binding.face->layout(graphics);
+        return true;
+    }
+    
     std::string to_json(const rapidjson::Document& document) {
         rapidjson::StringBuffer sb;
         rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
@@ -308,7 +317,8 @@ namespace {
     bool reload_binding_view(EditorViewBinding& binding) {
         if (!binding.context) return false;
         if (!write_binding_document(binding)) return false;
-        return mg::showGauge(binding.contextId, binding.documentPath.c_str());
+        if (!mg::showGauge(binding.contextId, binding.documentPath.c_str())) return false;
+        return layout_binding_face(binding);
     }
 
     const char* get_document_assets_impl() {
@@ -419,10 +429,14 @@ namespace {
         binding->face = std::make_unique<GaugeFace>();
         binding->editor = std::make_unique<GaugeEditor>(*binding->face);
         binding->editor->loadFace(rootJson);
-
         if (!mg::showGauge(binding->contextId, binding->documentPath.c_str())) {
             mg::removeContext(binding->contextId);
             g_ret = R"({"ok":false,"error":"DocumentLoadFailed"})";
+            return g_ret.c_str();
+        }
+        if (!layout_binding_face(*binding)) {
+            mg::removeContext(binding->contextId);
+            g_ret = R"({"ok":false,"error":"LayoutInitFailed"})";
             return g_ret.c_str();
         }
 
@@ -475,6 +489,7 @@ namespace {
         binding->renderWidth = width;
         binding->renderHeight = height;
         binding->context->resize(binding->renderWidth, binding->renderHeight);
+        layout_binding_face(*binding);
 
         g_ret = make_result(true, nullptr, binding);
         return g_ret.c_str();
@@ -1069,8 +1084,9 @@ const char* mg_editor_duplicate_element(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_get_element_bounds(std::uint32_t id) {
     try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
+        EditorViewBinding* binding = active_binding();
+        GaugeEditor* editor = binding ? binding->editor.get() : nullptr;
+        if (!editor || !binding || !layout_binding_face(*binding)) {
             g_ret = R"({"ok":false,"error":"NoEditor"})";
             return g_ret.c_str();
         }
@@ -1087,8 +1103,9 @@ const char* mg_editor_get_element_bounds(std::uint32_t id) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_list_element_bounds() {
     try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
+        EditorViewBinding* binding = active_binding();
+        GaugeEditor* editor = binding ? binding->editor.get() : nullptr;
+        if (!editor || !binding || !layout_binding_face(*binding)) {
             g_ret = "[]";
             return g_ret.c_str();
         }
@@ -1105,8 +1122,9 @@ const char* mg_editor_list_element_bounds() {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_hit_test(float x, float y, int index) {
     try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
+        EditorViewBinding* binding = active_binding();
+        GaugeEditor* editor = binding ? binding->editor.get() : nullptr;
+        if (!editor || !binding || !layout_binding_face(*binding)) {
             g_ret = "0";
             return g_ret.c_str();
         }
@@ -1123,8 +1141,9 @@ const char* mg_editor_hit_test(float x, float y, int index) {
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_hit_test_all(float x, float y) {
     try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
+        EditorViewBinding* binding = active_binding();
+        GaugeEditor* editor = binding ? binding->editor.get() : nullptr;
+        if (!editor || !binding || !layout_binding_face(*binding)) {
             g_ret = "[]";
             return g_ret.c_str();
         }
