@@ -1,3 +1,6 @@
+#include "EditorBindings.h"
+
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -6,1157 +9,823 @@
 
 #include <emscripten/emscripten.h>
 
-#include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
-#include <multigauge/App.h>
 #include <multigauge/Platform.h>
-#include <multigauge/editor/GaugeEditor.h>
-#include <multigauge/gauge/GaugeFace.h>
-
+#include <multigauge/screens/Screen.h>
 
 #include "platform/GraphicsContextCanvas.h"
 
+namespace mgweb {
+
+std::vector<std::unique_ptr<EditorViewBinding>> g_bindings;
+std::uint32_t g_nextViewId = 1;
+std::uint32_t g_activeViewId = 0;
+std::string g_ret;
+
 namespace {
-    struct EditorViewBinding {
-        std::uint32_t id = 0;
-        std::string name;
-        std::string canvasId;
-        std::string documentPath;
-        std::string assetsJson = "[]";
-        int renderWidth = 240;
-        int renderHeight = 240;
-        GraphicsContextCanvas* context = nullptr;
-        std::unique_ptr<GraphicsContextCanvas> ownedContext;
-        mg::ContextId contextId = 0;
-        std::unique_ptr<GaugeFace> face;
-        std::unique_ptr<GaugeEditor> editor;
-    };
 
-    std::vector<std::unique_ptr<EditorViewBinding>> g_bindings;
-    std::uint32_t g_nextViewId = 1;
-    std::uint32_t g_activeViewId = 0;
-    std::string g_ret;
-    constexpr const char* EDITOR_DOCUMENT_DIR = "/work/editor_docs";
+struct PreviewViewBinding {
+    std::uint32_t id = 0;
+    std::string canvasId;
+    std::string gaugePath;
+    int renderWidth = 240;
+    int renderHeight = 240;
+    GraphicsContextCanvas* context = nullptr;
+    std::unique_ptr<GraphicsContextCanvas> ownedContext;
+    mg::ContextId contextId = 0;
+};
 
-    std::string make_document_path(std::uint32_t id);
-    bool write_binding_document(EditorViewBinding& binding, const char* rootJsonOverride = nullptr);
+std::vector<std::unique_ptr<PreviewViewBinding>> g_previewBindings;
+std::uint32_t g_nextPreviewId = 1;
 
-    std::string to_json(const rapidjson::Document& document) {
-        rapidjson::StringBuffer sb;
-        rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
-        document.Accept(writer);
-        return std::string(sb.GetString(), sb.GetSize());
-    }
+class EditorPreviewScreen : public mg::Screen {
+public:
+    explicit EditorPreviewScreen(EditorViewBinding* owner) : binding(owner) {}
 
-    const char* set_exception_result(const char* fallback = "Exception") {
-        g_ret = std::string(R"({"ok":false,"error":")") + fallback + R"("})";
-        return g_ret.c_str();
-    }
-
-    EditorViewBinding* find_binding(std::uint32_t id) {
-        for (const auto& binding : g_bindings) {
-            if (binding && binding->id == id) return binding.get();
-        }
-        return nullptr;
-    }
-
-    EditorViewBinding* active_binding() {
-        return find_binding(g_activeViewId);
-    }
-
-    GaugeEditor* active_editor() {
-        auto* binding = active_binding();
-        return binding ? binding->editor.get() : nullptr;
-    }
-
-    GaugeEditor& catalog_editor() {
-        static GaugeFace fallbackFace;
-        static GaugeEditor fallbackEditor(fallbackFace);
-
-        GaugeEditor* editor = active_editor();
-        return editor ? *editor : fallbackEditor;
-    }
-
-    rapidjson::Value make_view_json(const EditorViewBinding& binding, rapidjson::Document::AllocatorType& allocator) {
-        rapidjson::Value obj(rapidjson::kObjectType);
-        obj.AddMember("id", binding.id, allocator);
-        obj.AddMember("name", rapidjson::Value(binding.name.c_str(), allocator), allocator);
-        obj.AddMember("canvasId", rapidjson::Value(binding.canvasId.c_str(), allocator), allocator);
-        obj.AddMember("renderWidth", binding.renderWidth, allocator);
-        obj.AddMember("renderHeight", binding.renderHeight, allocator);
-        obj.AddMember("active", binding.id == g_activeViewId, allocator);
-        return obj;
-    }
-
-    std::string make_views_json() {
-        rapidjson::Document document;
-        document.SetArray();
-        auto& allocator = document.GetAllocator();
-
-        for (const auto& binding : g_bindings) {
-            if (!binding) continue;
-            document.PushBack(make_view_json(*binding, allocator), allocator);
-        }
-
-        return to_json(document);
-    }
-
-    std::string make_result(bool ok, const char* error = nullptr, const EditorViewBinding* binding = nullptr) {
-        rapidjson::Document document;
-        document.SetObject();
-        auto& allocator = document.GetAllocator();
-
-        document.AddMember("ok", ok, allocator);
-        if (error) {
-            document.AddMember("error", rapidjson::Value(error, allocator), allocator);
-        }
+    void onShow(mg::RuntimeContext&) override {
         if (binding) {
-            document.AddMember("id", binding->id, allocator);
-            document.AddMember("name", rapidjson::Value(binding->name.c_str(), allocator), allocator);
-            document.AddMember("canvasId", rapidjson::Value(binding->canvasId.c_str(), allocator), allocator);
-            document.AddMember("renderWidth", binding->renderWidth, allocator);
-            document.AddMember("renderHeight", binding->renderHeight, allocator);
-            document.AddMember("active", binding->id == g_activeViewId, allocator);
+            mark_preview_dirty(*binding);
         }
-        if (g_activeViewId) {
-            document.AddMember("activeViewId", g_activeViewId, allocator);
+    }
+
+    void update(mg::RuntimeContext&, uint64_t deltaUs) override {
+        if (!binding || !binding->editor) return;
+        if (!ensure_preview_ready(*binding)) return;
+
+        if (GaugeFace* face = find_face(*binding->editor, binding->previewFaceId)) {
+            face->update(static_cast<int>(deltaUs));
         }
-
-        return to_json(document);
     }
 
-    std::string make_editor_action_result(const EditorResult& result) {
-        rapidjson::Document document;
-        document.SetObject();
-        auto& allocator = document.GetAllocator();
+    void draw(mg::RuntimeContext&, Graphics& g) override {
+        if (!binding || !binding->editor) return;
+        if (!ensure_preview_layout(*binding)) return;
 
-        document.AddMember("ok", result.ok, allocator);
-        if (!result.ok) {
-            document.AddMember("error", rapidjson::Value(result.error.c_str(), allocator), allocator);
-            return to_json(document);
+        if (GaugeFace* face = find_face(*binding->editor, binding->previewFaceId)) {
+            face->draw(g);
         }
+    }
 
-        if (result.data.IsObject()) {
-            for (auto it = result.data.MemberBegin(); it != result.data.MemberEnd(); ++it) {
-                rapidjson::Value key;
-                key.CopyFrom(it->name, allocator);
+private:
+    EditorViewBinding* binding = nullptr;
+};
 
-                rapidjson::Value value;
-                value.CopyFrom(it->value, allocator);
-                document.AddMember(std::move(key), std::move(value), allocator);
-            }
-        } else if (!result.data.IsNull()) {
-            rapidjson::Value value;
-            value.CopyFrom(result.data, allocator);
-            document.AddMember("data", std::move(value), allocator);
+PreviewViewBinding* find_preview_binding(std::uint32_t id) {
+    for (const auto& binding : g_previewBindings) {
+        if (binding && binding->id == id) return binding.get();
+    }
+    return nullptr;
+}
+
+std::string read_file_text(const char* path) {
+    std::vector<std::uint8_t> bytes;
+    if (!path || !path[0] || !FS().readAll(path, bytes)) {
+        return {};
+    }
+
+    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+
+rapidjson::Value copy_json(const rapidjson::Value& value, rapidjson::Document::AllocatorType& allocator) {
+    rapidjson::Value copy;
+    copy.CopyFrom(value, allocator);
+    return copy;
+}
+
+std::string make_preview_result(bool ok, const char* error = nullptr, const PreviewViewBinding* binding = nullptr) {
+    rapidjson::Document document;
+    document.SetObject();
+    auto& allocator = document.GetAllocator();
+
+    document.AddMember("ok", ok, allocator);
+    if (error) {
+        document.AddMember("error", rapidjson::Value(error, allocator), allocator);
+    }
+    if (binding) {
+        document.AddMember("id", binding->id, allocator);
+        document.AddMember("canvasId", rapidjson::Value(binding->canvasId.c_str(), allocator), allocator);
+        document.AddMember("renderWidth", binding->renderWidth, allocator);
+        document.AddMember("renderHeight", binding->renderHeight, allocator);
+    }
+
+    return to_json(document);
+}
+
+bool show_editor_binding(EditorViewBinding& binding) {
+    binding.previewAssets.reset();
+    mark_preview_dirty(binding);
+    return mg::setScreen(binding.contextId, std::make_unique<EditorPreviewScreen>(&binding));
+}
+
+const char* create_preview_view_impl(const char* canvasId, const char* gaugePath) {
+    if (!canvasId || !canvasId[0] || !gaugePath || !gaugePath[0]) {
+        g_ret = R"({"ok":false,"error":"BadArgs"})";
+        return g_ret.c_str();
+    }
+
+    auto binding = std::make_unique<PreviewViewBinding>();
+    binding->id = g_nextPreviewId++;
+    binding->canvasId = canvasId;
+    binding->gaugePath = gaugePath;
+    binding->ownedContext = std::make_unique<GraphicsContextCanvas>(binding->canvasId);
+    binding->context = binding->ownedContext.get();
+
+    if (!binding->context->init()) {
+        g_ret = R"({"ok":false,"error":"CanvasInitFailed"})";
+        return g_ret.c_str();
+    }
+
+    binding->context->resize(binding->renderWidth, binding->renderHeight);
+    binding->contextId = mg::addContext(*binding->context);
+
+    if (!mg::showGauge(binding->contextId, binding->gaugePath.c_str())) {
+        mg::removeContext(binding->contextId);
+        g_ret = R"({"ok":false,"error":"DocumentLoadFailed"})";
+        return g_ret.c_str();
+    }
+
+    const PreviewViewBinding* resultBinding = binding.get();
+    g_previewBindings.push_back(std::move(binding));
+    g_ret = make_preview_result(true, nullptr, resultBinding);
+    return g_ret.c_str();
+}
+
+const char* remove_preview_view_impl(std::uint32_t id) {
+    for (auto it = g_previewBindings.begin(); it != g_previewBindings.end(); ++it) {
+        auto& binding = *it;
+        if (!binding || binding->id != id) continue;
+
+        mg::removeContext(binding->contextId);
+        g_previewBindings.erase(it);
+        g_ret = make_preview_result(true);
+        return g_ret.c_str();
+    }
+
+    g_ret = R"({"ok":false,"error":"ViewNotFound"})";
+    return g_ret.c_str();
+}
+
+} // namespace
+
+std::string to_json(const rapidjson::Value& value) {
+    rapidjson::StringBuffer sb;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
+    value.Accept(writer);
+    return std::string(sb.GetString(), sb.GetSize());
+}
+
+std::string clone_json_value(const rapidjson::Value& value) {
+    rapidjson::Document document;
+    document.CopyFrom(value, document.GetAllocator());
+    return to_json(document);
+}
+
+bool parse_json(const std::string& jsonText, rapidjson::Document& document) {
+    document.Parse(jsonText.c_str(), jsonText.size());
+    return !document.HasParseError();
+}
+
+bool parse_object_json(const std::string& jsonText, rapidjson::Document& document) {
+    return parse_json(jsonText, document) && document.IsObject();
+}
+
+bool parse_array_json(const std::string& jsonText, rapidjson::Document& document) {
+    return parse_json(jsonText, document) && document.IsArray();
+}
+
+const char* set_exception_result(const char* fallback) {
+    g_ret = std::string(R"({"ok":false,"error":")") + (fallback ? fallback : "Exception") + R"("})";
+    return g_ret.c_str();
+}
+
+EditorViewBinding* find_binding(std::uint32_t id) {
+    for (const auto& binding : g_bindings) {
+        if (binding && binding->id == id) return binding.get();
+    }
+    return nullptr;
+}
+
+EditorViewBinding* active_binding() {
+    return find_binding(g_activeViewId);
+}
+
+Editor* active_editor() {
+    EditorViewBinding* binding = active_binding();
+    return binding ? binding->editor.get() : nullptr;
+}
+
+Editor::Id first_face_id(const Editor& editor) {
+    if (editor.faceCount() == 0) return 0;
+    return editor.idOf(editor.faceAt(0));
+}
+
+bool has_face_id(const Editor& editor, Editor::Id faceId) {
+    return find_face(editor, faceId) != nullptr;
+}
+
+GaugeFace* find_face(Editor& editor, Editor::Id faceId) {
+    for (std::size_t i = 0; i < editor.faceCount(); ++i) {
+        GaugeFace* face = editor.faceAt(i);
+        if (face && editor.idOf(face) == faceId) {
+            return face;
         }
-
-        return to_json(document);
     }
+    return nullptr;
+}
 
-    std::string make_editor_value_result(const EditorResult& result, const char* fallbackJson) {
-        if (!result.ok) {
-            return fallbackJson ? std::string(fallbackJson) : std::string("null");
+const GaugeFace* find_face(const Editor& editor, Editor::Id faceId) {
+    for (std::size_t i = 0; i < editor.faceCount(); ++i) {
+        const GaugeFace* face = editor.faceAt(i);
+        if (face && editor.idOf(face) == faceId) {
+            return face;
         }
+    }
+    return nullptr;
+}
 
-        return to_json(result.data);
+bool sync_preview_face(EditorViewBinding& binding) {
+    if (!binding.editor) {
+        binding.previewFaceId = 0;
+        return false;
     }
 
-    std::string make_hit_test_result(std::uint32_t id) {
-        rapidjson::Document document;
-        document.SetUint(id);
-        return to_json(document);
-    }
-
-    std::string make_default_element_json(const char* type) {
-        rapidjson::Document document;
-        document.SetObject();
-        auto& allocator = document.GetAllocator();
-        document.AddMember("type", rapidjson::Value(type ? type : "", allocator), allocator);
-        return to_json(document);
-    }
-
-    std::string make_history_state_json(bool canUndo = false, bool canRedo = false, std::uint32_t undoDepth = 0, std::uint32_t redoDepth = 0) {
-        rapidjson::Document document;
-        document.SetObject();
-        auto& allocator = document.GetAllocator();
-        document.AddMember("canUndo", canUndo, allocator);
-        document.AddMember("canRedo", canRedo, allocator);
-        document.AddMember("undoDepth", undoDepth, allocator);
-        document.AddMember("redoDepth", redoDepth, allocator);
-        return to_json(document);
-    }
-
-    std::string clone_json_value(const rapidjson::Value& value) {
-        rapidjson::Document document;
-        document.CopyFrom(value, document.GetAllocator());
-        return to_json(document);
-    }
-
-    bool parse_object_json(const std::string& jsonText, rapidjson::Document& document) {
-        document.Parse(jsonText.c_str(), jsonText.size());
-        return !document.HasParseError() && document.IsObject();
-    }
-
-    bool parse_array_json(const std::string& jsonText, rapidjson::Document& document) {
-        document.Parse(jsonText.c_str(), jsonText.size());
-        return !document.HasParseError() && document.IsArray();
-    }
-
-    void ensure_editor_document_dir() {
-        FS().makeDirectory(EDITOR_DOCUMENT_DIR);
-    }
-
-    std::string make_document_path(std::uint32_t id) {
-        return std::string(EDITOR_DOCUMENT_DIR) + "/view_" + std::to_string(id) + ".json";
-    }
-
-    bool load_source_document_parts(const char* gaugePath, std::string& outAssetsJson, std::string& outRootJson) {
-        outAssetsJson = "[]";
-        outRootJson = "{}";
-
-        if (!gaugePath || !gaugePath[0]) {
-            return true;
-        }
-
-        std::vector<std::uint8_t> bytes;
-        if (!FS().readAll(gaugePath, bytes) || bytes.empty()) {
-            return false;
-        }
-
-        rapidjson::Document document;
-        document.Parse(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-        if (document.HasParseError() || !document.IsObject()) {
-            return false;
-        }
-
-        const auto root = document.GetObject();
-        auto rootIt = root.FindMember("root");
-        auto assetsIt = root.FindMember("assets");
-        if (rootIt != root.MemberEnd() && rootIt->value.IsObject()) {
-            outRootJson = clone_json_value(rootIt->value);
-            if (assetsIt != root.MemberEnd() && assetsIt->value.IsArray()) {
-                outAssetsJson = clone_json_value(assetsIt->value);
-            }
-            return true;
-        }
-
-        outRootJson = clone_json_value(document);
+    if (binding.previewFaceId != 0 && has_face_id(*binding.editor, binding.previewFaceId)) {
         return true;
     }
 
-    bool load_text_file(const char* path, std::string& outText) {
-        outText.clear();
-        if (!path || !path[0]) {
-            return false;
-        }
+    const Editor::Id nextFaceId = first_face_id(*binding.editor);
+    const bool changed = nextFaceId != binding.previewFaceId;
+    binding.previewFaceId = nextFaceId;
+    if (changed) {
+        binding.previewDirty = true;
+        binding.previewAssets.reset();
+    }
 
-        std::vector<std::uint8_t> bytes;
-        if (!FS().readAll(path, bytes)) {
-            return false;
-        }
+    return binding.previewFaceId != 0;
+}
 
-        outText.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+void mark_preview_dirty(EditorViewBinding& binding) {
+    binding.previewDirty = true;
+    binding.previewAssets.reset();
+}
+
+bool ensure_preview_ready(EditorViewBinding& binding) {
+    if (!binding.editor || !sync_preview_face(binding)) return false;
+    if (!binding.context) return false;
+
+    mg::RuntimeContext* runtime = mg::getContext(binding.contextId);
+    if (!runtime) return false;
+
+    GaugeFace* face = find_face(*binding.editor, binding.previewFaceId);
+    if (!face) return false;
+
+    if (!binding.previewDirty && binding.previewAssets) {
         return true;
     }
 
-    std::string build_document_json_text(const EditorViewBinding& binding, const char* rootJsonOverride = nullptr) {
-        rapidjson::Document document;
-        document.SetObject();
-        auto& allocator = document.GetAllocator();
+    auto assets = std::make_unique<AssetManager>(FS(), runtime->getGraphicsContext());
 
-        rapidjson::Document assetsDocument;
-        if (!parse_array_json(binding.assetsJson, assetsDocument)) {
-            assetsDocument.SetArray();
+    rapidjson::Document assetsDocument;
+    if (parse_array_json(binding.assetsJson, assetsDocument)) {
+        const rapidjson::Document& doc = assetsDocument;
+        if (!assets->loadDocumentAssets(doc.GetArray())) {
+            return false;
         }
+    }
 
-        rapidjson::Value assetsValue;
-        assetsValue.CopyFrom(assetsDocument, allocator);
-        document.AddMember("assets", std::move(assetsValue), allocator);
+    if (!face->init(*assets)) {
+        return false;
+    }
 
-        rapidjson::Document rootDocument;
-        const std::string rootJson = rootJsonOverride
-            ? std::string(rootJsonOverride)
-            : (binding.editor ? binding.editor->saveFace() : std::string("{}"));
-        if (!parse_object_json(rootJson, rootDocument)) {
-            rootDocument.SetObject();
-        }
+    binding.previewAssets = std::move(assets);
+    binding.previewDirty = false;
+    return true;
+}
 
-        rapidjson::Value rootValue;
-        rootValue.CopyFrom(rootDocument, allocator);
-        document.AddMember("root", std::move(rootValue), allocator);
+bool ensure_preview_layout(EditorViewBinding& binding) {
+    if (!ensure_preview_ready(binding)) return false;
 
+    mg::RuntimeContext* runtime = mg::getContext(binding.contextId);
+    if (!runtime || !binding.editor) return false;
+
+    GaugeFace* face = find_face(*binding.editor, binding.previewFaceId);
+    if (!face) return false;
+
+    face->layout(runtime->getGraphics());
+    return true;
+}
+
+std::string make_result(bool ok, const char* error, const EditorViewBinding* binding) {
+    rapidjson::Document document;
+    document.SetObject();
+    auto& allocator = document.GetAllocator();
+
+    document.AddMember("ok", ok, allocator);
+    if (error) {
+        document.AddMember("error", rapidjson::Value(error, allocator), allocator);
+    }
+    if (binding) {
+        document.AddMember("id", binding->id, allocator);
+        document.AddMember("name", rapidjson::Value(binding->name.c_str(), allocator), allocator);
+        document.AddMember("canvasId", rapidjson::Value(binding->canvasId.c_str(), allocator), allocator);
+        document.AddMember("renderWidth", binding->renderWidth, allocator);
+        document.AddMember("renderHeight", binding->renderHeight, allocator);
+        document.AddMember("previewFaceId", binding->previewFaceId, allocator);
+        document.AddMember("active", binding->id == g_activeViewId, allocator);
+    }
+    if (g_activeViewId != 0) {
+        document.AddMember("activeViewId", g_activeViewId, allocator);
+    }
+
+    return to_json(document);
+}
+
+std::string make_editor_action_result(const EditorResult& result) {
+    rapidjson::Document document;
+    document.SetObject();
+    auto& allocator = document.GetAllocator();
+
+    document.AddMember("ok", result.ok, allocator);
+    if (!result.ok) {
+        document.AddMember("error", rapidjson::Value(result.error.c_str(), allocator), allocator);
         return to_json(document);
     }
 
-    bool write_binding_document(EditorViewBinding& binding, const char* rootJsonOverride) {
-        ensure_editor_document_dir();
-        if (binding.documentPath.empty()) {
-            binding.documentPath = make_document_path(binding.id);
+    if (result.data.IsObject()) {
+        for (auto it = result.data.MemberBegin(); it != result.data.MemberEnd(); ++it) {
+            document.AddMember(copy_json(it->name, allocator), copy_json(it->value, allocator), allocator);
         }
-
-        const std::string documentJson = build_document_json_text(binding, rootJsonOverride);
-        return FS().writeAll(
-            binding.documentPath,
-            reinterpret_cast<const std::uint8_t*>(documentJson.data()),
-            documentJson.size()
-        );
+    } else if (!result.data.IsNull()) {
+        document.AddMember("data", copy_json(result.data, allocator), allocator);
     }
 
-    bool reload_binding_view(EditorViewBinding& binding) {
-        if (!binding.context) return false;
-        if (!write_binding_document(binding)) return false;
-        return mg::showGauge(binding.contextId, binding.documentPath.c_str());
+    return to_json(document);
+}
+
+std::string make_editor_value_result(const EditorResult& result, const char* fallbackJson) {
+    if (!result.ok) {
+        return fallbackJson ? std::string(fallbackJson) : std::string("null");
+    }
+    return to_json(result.data);
+}
+
+bool load_source_document_parts(const char* gaugePath, std::string& outAssetsJson, std::string& outFacesJson) {
+    outAssetsJson = "[]";
+    outFacesJson = "[]";
+
+    if (!gaugePath || !gaugePath[0]) {
+        return true;
     }
 
-    const char* get_document_assets_impl() {
-        EditorViewBinding* binding = active_binding();
-        g_ret = binding ? binding->assetsJson : "[]";
+    const std::string text = read_file_text(gaugePath);
+    if (text.empty()) {
+        return false;
+    }
+
+    rapidjson::Document document;
+    if (!parse_json(text, document)) {
+        return false;
+    }
+
+    if (document.IsArray()) {
+        outFacesJson = to_json(document);
+        return true;
+    }
+
+    if (!document.IsObject()) {
+        return false;
+    }
+
+    const auto object = document.GetObject();
+    auto assetsIt = object.FindMember("assets");
+    if (assetsIt != object.MemberEnd() && assetsIt->value.IsArray()) {
+        outAssetsJson = clone_json_value(assetsIt->value);
+    }
+
+    auto facesIt = object.FindMember("faces");
+    if (facesIt != object.MemberEnd() && facesIt->value.IsArray()) {
+        outFacesJson = clone_json_value(facesIt->value);
+        return true;
+    }
+
+    auto rootIt = object.FindMember("root");
+    if (rootIt != object.MemberEnd() && rootIt->value.IsObject()) {
+        rapidjson::Document facesDocument;
+        facesDocument.SetArray();
+        facesDocument.PushBack(copy_json(rootIt->value, facesDocument.GetAllocator()), facesDocument.GetAllocator());
+        outFacesJson = to_json(facesDocument);
+        return true;
+    }
+
+    rapidjson::Document facesDocument;
+    facesDocument.SetArray();
+    facesDocument.PushBack(copy_json(document, facesDocument.GetAllocator()), facesDocument.GetAllocator());
+    outFacesJson = to_json(facesDocument);
+    return true;
+}
+
+std::string build_export_document_json(const EditorViewBinding& binding) {
+    rapidjson::Document document;
+    document.SetObject();
+    auto& allocator = document.GetAllocator();
+
+    rapidjson::Document assetsDocument;
+    if (!parse_array_json(binding.assetsJson, assetsDocument)) {
+        assetsDocument.SetArray();
+    }
+    document.AddMember("assets", copy_json(assetsDocument, allocator), allocator);
+
+    rapidjson::Document facesDocument;
+    const std::string facesJson = binding.editor ? binding.editor->saveDocument() : std::string("[]");
+    if (!parse_array_json(facesJson, facesDocument)) {
+        facesDocument.SetArray();
+    }
+    document.AddMember("faces", copy_json(facesDocument, allocator), allocator);
+
+    document.AddMember("previewFaceId", binding.previewFaceId, allocator);
+    return to_json(document);
+}
+
+std::string build_export_face_json(const EditorViewBinding& binding) {
+    if (!binding.editor) {
+        return "{}";
+    }
+
+    const GaugeFace* face = find_face(*binding.editor, binding.previewFaceId);
+    if (!face) {
+        return "{}";
+    }
+
+    rapidjson::Document saved = face->save();
+    return to_json(saved);
+}
+
+namespace {
+
+std::string make_views_json() {
+    rapidjson::Document document;
+    document.SetArray();
+    auto& allocator = document.GetAllocator();
+
+    for (const auto& binding : g_bindings) {
+        if (!binding) continue;
+
+        rapidjson::Value view(rapidjson::kObjectType);
+        view.AddMember("id", binding->id, allocator);
+        view.AddMember("name", rapidjson::Value(binding->name.c_str(), allocator), allocator);
+        view.AddMember("canvasId", rapidjson::Value(binding->canvasId.c_str(), allocator), allocator);
+        view.AddMember("renderWidth", binding->renderWidth, allocator);
+        view.AddMember("renderHeight", binding->renderHeight, allocator);
+        view.AddMember("previewFaceId", binding->previewFaceId, allocator);
+        view.AddMember("active", binding->id == g_activeViewId, allocator);
+        document.PushBack(std::move(view), allocator);
+    }
+
+    return to_json(document);
+}
+
+const char* create_view_impl(const char* canvasId, const char* gaugePath, const char* name) {
+    if (!canvasId || !canvasId[0]) {
+        g_ret = R"({"ok":false,"error":"BadArgs"})";
         return g_ret.c_str();
     }
 
-    const char* set_document_assets_text_impl(const std::string& jsonText) {
-        EditorViewBinding* binding = active_binding();
-        if (!binding) {
-            g_ret = R"({"ok":false,"error":"ViewNotFound"})";
-            return g_ret.c_str();
-        }
+    auto binding = std::make_unique<EditorViewBinding>();
+    binding->id = g_nextViewId++;
+    binding->name = (name && name[0]) ? name : ("Document " + std::to_string(binding->id));
+    binding->canvasId = canvasId;
+    binding->ownedContext = std::make_unique<GraphicsContextCanvas>(binding->canvasId);
+    binding->context = binding->ownedContext.get();
 
-        rapidjson::Document assetsDocument;
-        if (!parse_array_json(jsonText, assetsDocument)) {
-            g_ret = R"({"ok":false,"error":"BadJson"})";
-            return g_ret.c_str();
-        }
-
-        binding->assetsJson = clone_json_value(assetsDocument);
-        if (!reload_binding_view(*binding)) {
-            g_ret = R"({"ok":false,"error":"ReloadFailed"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_result(true, nullptr, binding);
+    if (!binding->context->init()) {
+        g_ret = R"({"ok":false,"error":"CanvasInitFailed"})";
         return g_ret.c_str();
     }
 
-    const char* set_document_assets_impl(const char* jsonValue) {
-        if (!jsonValue) {
-            g_ret = R"({"ok":false,"error":"BadArgs"})";
-            return g_ret.c_str();
-        }
+    binding->context->resize(binding->renderWidth, binding->renderHeight);
 
-        return set_document_assets_text_impl(jsonValue);
-    }
-
-    const char* set_document_assets_from_file_impl(const char* jsonPath) {
-        std::string jsonText;
-        if (!load_text_file(jsonPath, jsonText)) {
-            g_ret = R"({"ok":false,"error":"DocumentLoadFailed"})";
-            return g_ret.c_str();
-        }
-
-        return set_document_assets_text_impl(jsonText);
-    }
-
-    const char* reload_view_impl() {
-        EditorViewBinding* binding = active_binding();
-        if (!binding) {
-            g_ret = R"({"ok":false,"error":"ViewNotFound"})";
-            return g_ret.c_str();
-        }
-
-        if (!reload_binding_view(*binding)) {
-            g_ret = R"({"ok":false,"error":"ReloadFailed"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_result(true, nullptr, binding);
+    std::string facesJson;
+    if (!load_source_document_parts(gaugePath, binding->assetsJson, facesJson)) {
+        g_ret = R"({"ok":false,"error":"DocumentLoadFailed"})";
         return g_ret.c_str();
     }
 
-    const char* export_document_impl() {
-        EditorViewBinding* binding = active_binding();
-        if (!binding) {
-            g_ret.clear();
-            return g_ret.c_str();
-        }
+    binding->editor = std::make_unique<Editor>();
+    binding->editor->loadDocument(facesJson);
+    sync_preview_face(*binding);
 
-        g_ret = build_document_json_text(*binding);
+    binding->contextId = mg::addContext(*binding->context);
+    if (!show_editor_binding(*binding)) {
+        mg::removeContext(binding->contextId);
+        g_ret = R"({"ok":false,"error":"ContextInitFailed"})";
         return g_ret.c_str();
     }
 
-    const char* create_view_impl(const char* canvasId, const char* gaugePath, const char* name) {
-        if (!canvasId || !canvasId[0]) {
-            g_ret = R"({"ok":false,"error":"BadArgs"})";
-            return g_ret.c_str();
+    const EditorViewBinding* resultBinding = binding.get();
+    g_bindings.push_back(std::move(binding));
+    g_activeViewId = resultBinding->id;
+    g_ret = make_result(true, nullptr, resultBinding);
+    return g_ret.c_str();
+}
+
+const char* remove_view_impl(std::uint32_t id) {
+    for (auto it = g_bindings.begin(); it != g_bindings.end(); ++it) {
+        auto& binding = *it;
+        if (!binding || binding->id != id) continue;
+
+        mg::removeContext(binding->contextId);
+
+        const bool removedActive = (g_activeViewId == id);
+        g_bindings.erase(it);
+
+        if (removedActive) {
+            g_activeViewId = g_bindings.empty() ? 0 : g_bindings.front()->id;
         }
 
-        auto binding = std::make_unique<EditorViewBinding>();
-        binding->id = g_nextViewId++;
-        binding->name = (name && name[0]) ? name : ("Face " + std::to_string(binding->id));
-        binding->canvasId = canvasId;
-        binding->documentPath = make_document_path(binding->id);
-        binding->ownedContext = std::make_unique<GraphicsContextCanvas>(binding->canvasId);
-        binding->context = binding->ownedContext.get();
-        if (!binding->context->init()) {
-            g_ret = R"({"ok":false,"error":"CanvasInitFailed"})";
-            return g_ret.c_str();
-        }
-        binding->context->resize(binding->renderWidth, binding->renderHeight);
-
-        std::string rootJson;
-        if (!load_source_document_parts(gaugePath, binding->assetsJson, rootJson)) {
-            g_ret = R"({"ok":false,"error":"DocumentLoadFailed"})";
-            return g_ret.c_str();
-        }
-        if (!write_binding_document(*binding, rootJson.c_str())) {
-            g_ret = R"({"ok":false,"error":"DocumentWriteFailed"})";
-            return g_ret.c_str();
-        }
-
-        binding->contextId = mg::addContext(*binding->context);
-        binding->face = std::make_unique<GaugeFace>();
-        binding->editor = std::make_unique<GaugeEditor>(*binding->face);
-        binding->editor->loadFace(rootJson);
-
-        if (!mg::showGauge(binding->contextId, binding->documentPath.c_str())) {
-            mg::removeContext(binding->contextId);
-            g_ret = R"({"ok":false,"error":"DocumentLoadFailed"})";
-            return g_ret.c_str();
-        }
-
-        const EditorViewBinding* bindingPtr = binding.get();
-        g_bindings.push_back(std::move(binding));
-        g_activeViewId = bindingPtr->id;
-
-        g_ret = make_result(true, nullptr, bindingPtr);
+        g_ret = make_result(true, nullptr, active_binding());
         return g_ret.c_str();
     }
 
-    const char* remove_view_impl(std::uint32_t id) {
-        for (auto it = g_bindings.begin(); it != g_bindings.end(); ++it) {
-            auto& binding = *it;
-            if (!binding || binding->id != id) continue;
+    g_ret = R"({"ok":false,"error":"ViewNotFound"})";
+    return g_ret.c_str();
+}
 
-            mg::removeContext(binding->contextId);
-            if (!binding->documentPath.empty()) {
-                FS().remove(binding->documentPath);
-            }
-
-            const bool removedActive = (g_activeViewId == id);
-            g_bindings.erase(it);
-
-            if (removedActive) {
-                g_activeViewId = g_bindings.empty() ? 0 : g_bindings.front()->id;
-            }
-
-            const EditorViewBinding* nextBinding = active_binding();
-            g_ret = make_result(true, nullptr, nextBinding);
-            return g_ret.c_str();
-        }
-
+const char* set_view_render_size_impl(std::uint32_t id, int width, int height) {
+    EditorViewBinding* binding = find_binding(id);
+    if (!binding || !binding->context) {
         g_ret = R"({"ok":false,"error":"ViewNotFound"})";
         return g_ret.c_str();
     }
 
-    const char* set_view_render_size_impl(std::uint32_t id, int width, int height) {
-        EditorViewBinding* binding = find_binding(id);
-        if (!binding || !binding->context) {
-            g_ret = R"({"ok":false,"error":"ViewNotFound"})";
-            return g_ret.c_str();
-        }
-
-        if (width <= 0 || height <= 0) {
-            g_ret = R"({"ok":false,"error":"BadArgs"})";
-            return g_ret.c_str();
-        }
-
-        binding->renderWidth = width;
-        binding->renderHeight = height;
-        binding->context->resize(binding->renderWidth, binding->renderHeight);
-
-        g_ret = make_result(true, nullptr, binding);
+    if (width <= 0 || height <= 0) {
+        g_ret = R"({"ok":false,"error":"BadArgs"})";
         return g_ret.c_str();
     }
+
+    binding->renderWidth = width;
+    binding->renderHeight = height;
+    binding->context->resize(width, height);
+    mark_preview_dirty(*binding);
+    g_ret = make_result(true, nullptr, binding);
+    return g_ret.c_str();
 }
+
+const char* set_preview_face_impl(std::uint32_t faceId) {
+    EditorViewBinding* binding = active_binding();
+    if (!binding || !binding->editor) {
+        g_ret = R"({"ok":false,"error":"ViewNotFound"})";
+        return g_ret.c_str();
+    }
+
+    if (faceId != 0 && !has_face_id(*binding->editor, faceId)) {
+        g_ret = R"({"ok":false,"error":"FaceNotFound"})";
+        return g_ret.c_str();
+    }
+
+    binding->previewFaceId = faceId == 0 ? first_face_id(*binding->editor) : faceId;
+    mark_preview_dirty(*binding);
+    g_ret = make_result(true, nullptr, binding);
+    return g_ret.c_str();
+}
+
+const char* get_document_assets_impl() {
+    EditorViewBinding* binding = active_binding();
+    g_ret = binding ? binding->assetsJson : "[]";
+    return g_ret.c_str();
+}
+
+const char* set_document_assets_text_impl(const std::string& jsonText) {
+    EditorViewBinding* binding = active_binding();
+    if (!binding) {
+        g_ret = R"({"ok":false,"error":"ViewNotFound"})";
+        return g_ret.c_str();
+    }
+
+    rapidjson::Document assetsDocument;
+    if (!parse_array_json(jsonText, assetsDocument)) {
+        g_ret = R"({"ok":false,"error":"BadJson"})";
+        return g_ret.c_str();
+    }
+
+    binding->assetsJson = clone_json_value(assetsDocument);
+    mark_preview_dirty(*binding);
+    g_ret = make_result(true, nullptr, binding);
+    return g_ret.c_str();
+}
+
+const char* export_document_impl() {
+    EditorViewBinding* binding = active_binding();
+    if (!binding) {
+        g_ret.clear();
+        return g_ret.c_str();
+    }
+
+    g_ret = build_export_document_json(*binding);
+    return g_ret.c_str();
+}
+
+const char* export_face_impl() {
+    EditorViewBinding* binding = active_binding();
+    if (!binding) {
+        g_ret = "{}";
+        return g_ret.c_str();
+    }
+
+    g_ret = build_export_face_json(*binding);
+    return g_ret.c_str();
+}
+
+} // namespace
+
+} // namespace mgweb
 
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_create_view(const char* canvasId, const char* gaugePath, const char* name) {
     try {
-        return create_view_impl(canvasId, gaugePath, name);
+        return mgweb::create_view_impl(canvasId, gaugePath, name);
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_list_views() {
     try {
-        g_ret = make_views_json();
-        return g_ret.c_str();
+        mgweb::g_ret = mgweb::make_views_json();
+        return mgweb::g_ret.c_str();
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_select_view(std::uint32_t id) {
     try {
-        EditorViewBinding* binding = find_binding(id);
+        mgweb::EditorViewBinding* binding = mgweb::find_binding(id);
         if (!binding) {
-            g_ret = R"({"ok":false,"error":"ViewNotFound"})";
-            return g_ret.c_str();
+            mgweb::g_ret = R"({"ok":false,"error":"ViewNotFound"})";
+            return mgweb::g_ret.c_str();
         }
 
-        g_activeViewId = binding->id;
-        g_ret = make_result(true, nullptr, binding);
-        return g_ret.c_str();
+        mgweb::g_activeViewId = id;
+        mgweb::g_ret = mgweb::make_result(true, nullptr, binding);
+        return mgweb::g_ret.c_str();
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_remove_view(std::uint32_t id) {
     try {
-        return remove_view_impl(id);
+        return mgweb::remove_view_impl(id);
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_set_view_render_size(std::uint32_t id, int width, int height) {
     try {
-        return set_view_render_size_impl(id, width, height);
+        return mgweb::set_view_render_size_impl(id, width, height);
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_preview_create_view(const char* canvasId, const char* gaugePath, const char* name) {
+const char* mg_editor_set_preview_face(std::uint32_t faceId) {
     try {
-        return create_view_impl(canvasId, gaugePath, name);
+        return mgweb::set_preview_face_impl(faceId);
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_preview_remove_view(std::uint32_t id) {
-    try {
-        return remove_view_impl(id);
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_list_tree() {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = "[]";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_value_result(editor->listTreeJson(), "[]");
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_list_elements() {
-    try {
-        g_ret = make_editor_value_result(catalog_editor().listElements(), "[]");
-        return g_ret.c_str();
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_list_values() {
-    try {
-        g_ret = make_editor_value_result(catalog_editor().listValues(), "[]");
-        return g_ret.c_str();
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_get_properties(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = "[]";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_value_result(editor->getPropertiesMetaJson(id), "[]");
-        return g_ret.c_str();
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_get_history_state() {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = make_history_state_json();
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_value_result(editor->getHistoryState(), "{}");
-        return g_ret.c_str();
-    } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_get_document_assets() {
     try {
-        return get_document_assets_impl();
+        return mgweb::get_document_assets_impl();
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_set_document_assets(const char* jsonValue) {
     try {
-        return set_document_assets_impl(jsonValue);
+        if (!jsonValue) {
+            mgweb::g_ret = R"({"ok":false,"error":"BadArgs"})";
+            return mgweb::g_ret.c_str();
+        }
+        return mgweb::set_document_assets_text_impl(jsonValue);
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_set_document_assets_from_file(const char* jsonPath) {
     try {
-        return set_document_assets_from_file_impl(jsonPath);
+        const std::string text = mgweb::read_file_text(jsonPath);
+        if (text.empty()) {
+            mgweb::g_ret = R"({"ok":false,"error":"DocumentLoadFailed"})";
+            return mgweb::g_ret.c_str();
+        }
+        return mgweb::set_document_assets_text_impl(text);
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_reload_view() {
     try {
-        return reload_view_impl();
+        mgweb::EditorViewBinding* binding = mgweb::active_binding();
+        if (!binding) {
+            mgweb::g_ret = R"({"ok":false,"error":"ViewNotFound"})";
+            return mgweb::g_ret.c_str();
+        }
+
+        mgweb::mark_preview_dirty(*binding);
+        if (!mgweb::show_editor_binding(*binding)) {
+            mgweb::g_ret = R"({"ok":false,"error":"ReloadFailed"})";
+            return mgweb::g_ret.c_str();
+        }
+
+        mgweb::g_ret = mgweb::make_result(true, nullptr, binding);
+        return mgweb::g_ret.c_str();
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_get_property_node(std::uint32_t id, const char* path) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor || !path) {
-            g_ret = "{}";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_value_result(editor->getPropertiesMetaJson(id, path), "{}");
-        return g_ret.c_str();
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_undo() {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->undo());
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_redo() {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->redo());
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_set_property(std::uint32_t id, const char* path, const char* jsonValue) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        if (!path || !jsonValue) {
-            g_ret = R"({"ok":false,"error":"BadArgs"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->setPropertyJson(id, path, jsonValue));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_add_element(std::uint32_t parentId, const char* type) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        if (!type) {
-            g_ret = R"({"ok":false,"error":"BadArgs"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->addElementJson(parentId, make_default_element_json(type)));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_insert_element(std::uint32_t parentId, const char* type, int index) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        if (!type) {
-            g_ret = R"({"ok":false,"error":"BadArgs"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->insertElementJson(parentId, make_default_element_json(type), index));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_move_element(std::uint32_t id, std::uint32_t newParentId, int index) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->moveElement(id, newParentId, index));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_remove_element(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->removeElement(id));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_get_element_json(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = "{}";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_value_result(editor->getElementJson(id), "{}");
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_insert_element_json(std::uint32_t parentId, const char* jsonValue, int index) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        if (!jsonValue) {
-            g_ret = R"({"ok":false,"error":"BadArgs"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->insertElementJson(parentId, jsonValue, index));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_replace_element_json(std::uint32_t id, const char* jsonValue) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        if (!jsonValue) {
-            g_ret = R"({"ok":false,"error":"BadArgs"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->replaceElementJson(id, jsonValue));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_bring_forward(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->bringForward(id));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_bring_to_front(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->bringToFront(id));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_send_backward(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->sendBackward(id));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_send_to_back(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->sendToBack(id));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_reorder_element(std::uint32_t id, int index) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->reorderElement(id, index));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_copy_element(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->copyElement(id));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_paste_into_element(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->pasteIntoElement(id));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_paste_to_replace_element(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->pasteToReplaceElement(id));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_duplicate_element(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->duplicateElement(id));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_get_element_bounds(std::uint32_t id) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = R"({"ok":false,"error":"NoEditor"})";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_action_result(editor->getElementBoundsJson(id));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_list_element_bounds() {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = "[]";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_value_result(editor->listElementBoundsJson(), "[]");
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_hit_test(float x, float y, int index) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = "0";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_hit_test_result(editor->hitTest(x, y, index));
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
-    }
-}
-
-EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_hit_test_all(float x, float y) {
-    try {
-        GaugeEditor* editor = active_editor();
-        if (!editor) {
-            g_ret = "[]";
-            return g_ret.c_str();
-        }
-
-        g_ret = make_editor_value_result(editor->hitTestAll(x, y), "[]");
-        return g_ret.c_str();
-    } catch (const std::exception& error) {
-        return set_exception_result(error.what());
-    } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_export_document() {
     try {
-        return export_document_impl();
+        return mgweb::export_document_impl();
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_export_face() {
     try {
-        return export_document_impl();
+        return mgweb::export_face_impl();
     } catch (const std::exception& error) {
-        return set_exception_result(error.what());
+        return mgweb::set_exception_result(error.what());
     } catch (...) {
-        return set_exception_result();
+        return mgweb::set_exception_result();
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+const char* mg_preview_create_view(const char* canvasId, const char* gaugePath, const char* name) {
+    (void)name;
+    try {
+        return mgweb::create_preview_view_impl(canvasId, gaugePath);
+    } catch (const std::exception& error) {
+        return mgweb::set_exception_result(error.what());
+    } catch (...) {
+        return mgweb::set_exception_result();
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+const char* mg_preview_remove_view(std::uint32_t id) {
+    try {
+        return mgweb::remove_preview_view_impl(id);
+    } catch (const std::exception& error) {
+        return mgweb::set_exception_result(error.what());
+    } catch (...) {
+        return mgweb::set_exception_result();
     }
 }
 
