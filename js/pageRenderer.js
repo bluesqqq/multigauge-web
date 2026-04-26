@@ -121,7 +121,14 @@ async function createPageRenderer() {
         }
     };
 
-    window.addEventListener("pagehide", disposeAll, { once: true });
+    window.addEventListener("pagehide", (event) => {
+        // When the page is entering the browser's back/forward cache, keep
+        // the preview views alive so canvases still render after Back.
+        if (event?.persisted) {
+            return;
+        }
+        disposeAll();
+    }, { once: true });
 
     return {
         runtime,
