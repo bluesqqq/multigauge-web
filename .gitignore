@@ -9,5 +9,7 @@ build.ninja
 .ninja_*
 compile_commands.json
 
-/wasm/*.a
-/wasm/*.map
+/web/dist/*.a
+/web/dist/*.map
+/web/dist/*.wasm
+/web/dist/multigauge.js

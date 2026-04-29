@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Multigauge Runtime Example</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0b0f14;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="screen"></canvas>
+  <script src="../../web/dist/mg.js"></script>
+  <script>
+    (async function() {
+      const mg = await Multigauge.init();
+      const canvas = document.getElementById("screen");
+      const runtime = mg.createRuntime(canvas);
+
+      runtime.load({
+        layout: {
+          "flex-container": {
+            direction: "column",
+            justify: "center",
+            "align-items": "center"
+          },
+          padding: {
+            left: 24,
+            right: 24,
+            top: 24,
+            bottom: 24
+          }
+        },
+        children: [
+          {
+            type: "rectangle",
+            style: {
+              width: 220,
+              height: 140
+            },
+            props: {
+              paint: {
+                fill: {
+                  color: "#22c55e"
+                }
+              },
+              radius: 12
+            },
+            children: []
+          }
+        ]
+      });
+
+      runtime.start();
+    })().catch(function(err) {
+      console.error(err);
+    });
+  </script>
+</body>
+</html>

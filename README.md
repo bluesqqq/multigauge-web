@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://www.multi-gauge.com/">
-    <img src="./external/multigauge-core/assets/multigauge.png" alt="Multigauge" width="250" />
+    <img src="./multigauge-core/assets/multigauge.png" alt="Multigauge" width="250" />
   </a>
 </p>
 
@@ -10,7 +10,7 @@
 
 `multigauge-web` is the WebAssembly/browser target for [`multigauge-core`](https://github.com/bluesqqq/multigauge-core).
 
-This repo builds the Multigauge runtime for the web and outputs the generated browser artifacts directly into the root [`wasm/`](./wasm/) folder.
+This repo builds the Multigauge runtime for the web and outputs the generated browser artifacts into [`web/dist/`](./web/dist/).
 
 ## Quick Start
 
@@ -66,11 +66,11 @@ Release build:
 
 ### 5. Done
 
-The generated artifacts will be written to [`wasm/`](./wasm/):
+The generated artifacts will be written to [`web/dist/`](./web/dist/):
 
-- [`wasm/multigauge.js`](./wasm/multigauge.js)
-- [`wasm/multigauge.wasm`](./wasm/multigauge.wasm)
-- [`wasm/multigauge.wasm.map`](./wasm/multigauge.wasm.map)
+- [`web/dist/multigauge.js`](./web/dist/multigauge.js)
+- [`web/dist/multigauge.wasm`](./web/dist/multigauge.wasm)
+- [`web/dist/multigauge.wasm.map`](./web/dist/multigauge.wasm.map)
 
 ## Manual Build
 
@@ -90,15 +90,16 @@ cmake --build --preset wasm-release
 
 ## Project Layout
 
-- [`src/`](./src/) contains the web target sources and Emscripten-specific platform bindings
-- [`external/multigauge-core/`](./external/multigauge-core/) is the shared core renderer/editor library
-- [`wasm/`](./wasm/) contains the generated browser build outputs
+- [`web/src/`](./web/src/) contains the web target sources and Emscripten-specific platform bindings
+- [`web/bindings/`](./web/bindings/) contains the JS/WASM bindings
+- [`multigauge-core/`](./multigauge-core/) is the shared core renderer/editor library
+- [`web/dist/`](./web/dist/) contains the generated browser build outputs and `mg.js`
 - [`CMakeLists.txt`](./CMakeLists.txt) defines the wasm target and output paths
 - [`CMakePresets.json`](./CMakePresets.json) defines the standard debug and release configure/build presets
 
 ## Notes
 
-- The build output is intentionally written into the repo root [`wasm/`](./wasm/) folder rather than the CMake build directory.
+- The build output is intentionally written into [`web/dist/`](./web/dist/) rather than the CMake build directory.
 - The helper scripts are convenience wrappers around the same preset-based CMake flow used for manual builds.
 - This repo currently targets the browser/WebAssembly build. Native desktop or server targets would need separate platform wiring.
 

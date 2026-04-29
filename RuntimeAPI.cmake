@@ -1,5 +1,10 @@
 set(MG_RUNTIME_API_EXPORTS
   "'_main'"
-  "'_mg_preview_create_view'"
-  "'_mg_preview_remove_view'"
+  "'_mg_runtime_create_context'"
+  "'_mg_runtime_remove_context'"
+  "'_mg_runtime_clear_screen'"
+  "'_mg_runtime_set_gauge_screen'"
+  "'_mg_runtime_set_gauge_screen_from_file'"
+  "'_mg_runtime_set_editor_screen'"
+  "'_mg_runtime_frame'"
 )

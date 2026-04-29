@@ -4,17 +4,25 @@ project(multigauge_web LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(STATIC_WASM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/wasm")
+set(WEB_DIST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/web/dist")
 set(MULTIGAUGE_CORE_DIR
-  "${CMAKE_CURRENT_SOURCE_DIR}/external/multigauge-core"
+  "${CMAKE_CURRENT_SOURCE_DIR}/multigauge-core"
   CACHE PATH "Path to the multigauge-core checkout"
 )
 
-file(MAKE_DIRECTORY "${STATIC_WASM_DIR}")
+file(MAKE_DIRECTORY "${WEB_DIST_DIR}")
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${STATIC_WASM_DIR}")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${STATIC_WASM_DIR}")
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${STATIC_WASM_DIR}")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${WEB_DIST_DIR}")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${WEB_DIST_DIR}")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${WEB_DIST_DIR}")
+
+if (NOT EXISTS "${MULTIGAUGE_CORE_DIR}/CMakeLists.txt")
+  set(MULTIGAUGE_CORE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/multigauge-core"
+    CACHE PATH "Path to the multigauge-core checkout"
+    FORCE
+  )
+endif()
 
 if (NOT EXISTS "${MULTIGAUGE_CORE_DIR}/CMakeLists.txt")
   message(FATAL_ERROR
@@ -26,14 +34,14 @@ endif()
 add_subdirectory("${MULTIGAUGE_CORE_DIR}" multigauge-core-build)
 
 set(MG_WASM_SOURCES
-  src/main.cpp
-  bindings/ApiBindings.cpp
-  bindings/EditorApi.cpp
-  bindings/RuntimeApi.cpp
-  src/platform/FileSystemEmscripten.cpp
-  src/platform/GraphicsContextCanvas.cpp
-  src/platform/LoggerWebConsole.cpp
-  src/platform/TimeWeb.cpp
+  web/src/main.cpp
+  web/bindings/ApiBindings.cpp
+  web/bindings/EditorApi.cpp
+  web/bindings/RuntimeApi.cpp
+  web/src/platform/FileSystemEmscripten.cpp
+  web/src/platform/GraphicsContextCanvas.cpp
+  web/src/platform/LoggerWebConsole.cpp
+  web/src/platform/TimeWeb.cpp
 )
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/EditorApi.cmake")
@@ -50,12 +58,12 @@ target_link_libraries(multigauge_wasm PRIVATE multigauge_core)
 
 set_target_properties(multigauge_wasm PROPERTIES
   OUTPUT_NAME "multigauge"
-  RUNTIME_OUTPUT_DIRECTORY "${STATIC_WASM_DIR}"
+  RUNTIME_OUTPUT_DIRECTORY "${WEB_DIST_DIR}"
 )
 
 target_include_directories(multigauge_wasm PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/bindings
-  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/web/bindings
+  ${CMAKE_CURRENT_SOURCE_DIR}/web/src
 )
 
 if (NOT MSVC)
@@ -85,10 +93,10 @@ if (EMSCRIPTEN)
   )
 
   add_custom_command(TARGET multigauge_wasm POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${STATIC_WASM_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${WEB_DIST_DIR}"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "$<TARGET_FILE:multigauge_wasm>"
-      "${STATIC_WASM_DIR}/multigauge.js"
+      "${WEB_DIST_DIR}/multigauge.js"
     VERBATIM
   )
 endif()
