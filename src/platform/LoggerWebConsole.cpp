@@ -5,6 +5,8 @@
 
 #include <emscripten.h>
 
+using mg::io::LogLevel;
+
 static const char* levelToString(LogLevel l) {
     switch (l) {
         case LogLevel::Debug: return "DEBUG";

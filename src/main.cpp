@@ -10,15 +10,13 @@
 namespace mg {
     LoggerWebConsole logger;
     FileSystemEmscripten fileSystem;
-    TimeWeb clock;
+    TimeWeb time;
 }
-
-Platform plat{ mg::fileSystem, mg::clock, &mg::logger };
 
 static uint64_t lastMs = 0;
 
 static void tick() {
-    uint64_t now = mg::clock.getMillis();
+    uint64_t now = mg::time.getMillis();
     uint64_t dt = (lastMs == 0) ? 0 : (now - lastMs);
     lastMs = now;
     (void)dt;
@@ -27,7 +25,7 @@ static void tick() {
 }
 
 int main() {
-    if (!mg::init(plat)) return 1;
+    if (!mg::init(mg::fileSystem, mg::time, &mg::logger)) return 1;
 
     emscripten_set_main_loop(tick, 0, 1);
     return 0;

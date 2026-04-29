@@ -5,6 +5,12 @@
 #include <cmath>
 #include <emscripten.h>
 
+using mg::Anchor;
+using mg::images::Image;
+using mg::graphics::FontSlant;
+using mg::graphics::FontWeight;
+using mg::graphics::rgba;
+
 static inline float clamp01(float v) { return std::max(0.0f, std::min(1.0f, v)); }
 
 // Assumes rgba components are 0..255 (typical). If yours are 0..1, adjust here.

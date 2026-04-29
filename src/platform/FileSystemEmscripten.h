@@ -1,7 +1,7 @@
 #pragma once
 #include <multigauge/io/FileSystem.h>
 
-class FileSystemEmscripten : public FileSystem {
+class FileSystemEmscripten : public mg::io::FileSystem {
     public:
         bool init() override;
 
