@@ -5,6 +5,10 @@
     return document.getElementById("hierarchy");
   }
 
+  function getHierarchyJsonPanel() {
+    return document.getElementById("hierarchy-json");
+  }
+
   function getUndoButton() {
     return document.getElementById("undo-btn");
   }
@@ -196,15 +200,18 @@
 
   function renderHierarchyPanel() {
     var panel = getHierarchyPanel();
-    if (!panel) {
+    var jsonPanel = getHierarchyJsonPanel();
+    if (!panel || !jsonPanel) {
       return;
     }
 
     panel.textContent = "";
+    jsonPanel.textContent = "";
 
     var editor = ns.getEditor();
     if (!editor) {
       panel.textContent = "No editor available.";
+      jsonPanel.textContent = "No editor available.";
       return;
     }
 
@@ -214,7 +221,15 @@
     } catch (err) {
       console.error(err);
       panel.textContent = "Could not load hierarchy.";
+      jsonPanel.textContent = "Could not load hierarchy.";
       return;
+    }
+
+    try {
+      jsonPanel.value = JSON.stringify(data, null, 2);
+    } catch (jsonErr) {
+      console.error(jsonErr);
+      jsonPanel.value = "Could not stringify hierarchy.";
     }
 
     var roots = Array.isArray(data.roots) ? data.roots : [];
@@ -222,14 +237,15 @@
 
     if (!roots.length) {
       panel.textContent = "No elements.";
-      return;
     }
 
     var list = document.createElement("ul");
     roots.forEach(function(rootId) {
       list.appendChild(renderHierarchyNode(nodes, rootId, null, 0));
     });
-    panel.appendChild(list);
+    if (roots.length) {
+      panel.appendChild(list);
+    }
   }
 
   function selectNode(id) {

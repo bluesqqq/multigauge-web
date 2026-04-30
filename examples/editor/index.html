@@ -17,12 +17,11 @@
 
     body {
       display: grid;
-      grid-template-columns: 320px 1fr;
-      grid-template-rows: auto 1fr 280px;
+      grid-template-columns: 320px 1fr 360px;
+      grid-template-rows: auto 1fr;
       grid-template-areas:
-        "toolbar toolbar"
-        "hierarchy canvas"
-        "hierarchy properties";
+        "toolbar toolbar toolbar"
+        "hierarchy canvas properties";
       gap: 0;
     }
 
@@ -41,8 +40,11 @@
       border-right: 1px solid #243041;
       border-bottom: 1px solid #243041;
       background: #111827;
-      overflow: auto;
-      padding: 12px;
+      overflow: hidden;
+      padding: 12px 12px 10px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
     }
 
     #canvas-panel {
@@ -59,8 +61,11 @@
       grid-area: properties;
       box-sizing: border-box;
       background: #111827;
-      overflow: auto;
-      padding: 12px;
+      overflow: hidden;
+      padding: 12px 12px 10px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
     }
 
     h2 {
@@ -121,6 +126,55 @@
       background: #1d4ed8;
     }
 
+    #hierarchy-split {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .hierarchy-pane {
+      flex: 1 1 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .hierarchy-tree {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      padding: 0 4px 0 0;
+      background: transparent;
+    }
+
+    .hierarchy-json-wrap {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid #243041;
+      border-radius: 8px;
+      background: #060b14;
+      padding: 10px;
+    }
+
+    #hierarchy-json {
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      margin: 0;
+      border: 0;
+      outline: 0;
+      resize: none;
+      background: transparent;
+      white-space: pre;
+      word-break: normal;
+      font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      color: #cbd5e1;
+      padding: 0;
+    }
+
     #properties fieldset {
       border: 1px solid #243041;
       border-radius: 8px;
@@ -163,6 +217,47 @@
       resize: vertical;
     }
 
+    #properties-split {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .properties-form {
+      flex: 1 1 0;
+      min-height: 0;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .properties-json-wrap {
+      flex: 1 1 0;
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid #243041;
+      border-radius: 8px;
+      background: #060b14;
+      padding: 10px;
+    }
+
+    #properties-json {
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      margin: 0;
+      border: 0;
+      outline: 0;
+      resize: none;
+      background: transparent;
+      white-space: pre;
+      word-break: normal;
+      font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      color: #cbd5e1;
+      padding: 0;
+    }
+
     #canvas-wrap {
       flex: 1 1 auto;
       min-width: 0;
@@ -199,7 +294,16 @@
   </div>
   <aside id="hierarchy-panel">
     <h2>Hierarchy</h2>
-    <div id="hierarchy"></div>
+    <div id="hierarchy-split">
+      <section class="hierarchy-pane">
+        <div id="hierarchy" class="hierarchy-tree"></div>
+      </section>
+      <section class="hierarchy-pane">
+        <div class="hierarchy-json-wrap">
+          <textarea id="hierarchy-json" readonly spellcheck="false"></textarea>
+        </div>
+      </section>
+    </div>
   </aside>
   <main id="canvas-panel">
     <div id="canvas-wrap">
@@ -208,7 +312,12 @@
   </main>
   <section id="properties-panel">
     <h2>Properties</h2>
-    <div id="properties"></div>
+    <div id="properties-split">
+      <div id="properties" class="properties-form"></div>
+      <div class="properties-json-wrap">
+        <textarea id="properties-json" readonly spellcheck="false"></textarea>
+      </div>
+    </div>
   </section>
   <script src="../../web/dist/mg.js"></script>
   <script src="state.js"></script>

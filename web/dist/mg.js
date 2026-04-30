@@ -29,22 +29,6 @@
         return new Error(message);
     }
 
-    function restoreGlobalModule(previousModule, internalModule) {
-        if (root.Module !== internalModule) {
-            return;
-        }
-
-        if (typeof previousModule === "undefined") {
-            try {
-                delete root.Module;
-            } catch (_) {
-                root.Module = undefined;
-            }
-        } else {
-            root.Module = previousModule;
-        }
-    }
-
     function ensureReady() {
         if (shutdownFlag) {
             throw userError("Multigauge has been shut down. Reload the page to use it again.");
@@ -209,7 +193,6 @@
         }
 
         initPromise = new Promise(function(resolve, reject) {
-            var previousModule = root.Module;
             var internalModule = {
                 noInitialRun: true,
                 locateFile: function(path) {
@@ -226,13 +209,15 @@
                     } catch (err) {
                         moduleRef = null;
                         reject(userError("Multigauge failed to initialize: " + (err && err.message ? err.message : String(err))));
-                    } finally {
-                        restoreGlobalModule(previousModule, internalModule);
                     }
                 }
             };
 
             root.Module = internalModule;
+
+            var moduleSetup = document.createElement("script");
+            moduleSetup.text = "var Module = globalThis.Module;";
+            document.head.appendChild(moduleSetup);
 
             var script = document.createElement("script");
             script.src = wasmScriptUrl;
@@ -240,7 +225,6 @@
             script.onerror = function() {
                 moduleRef = null;
                 initPromise = null;
-                restoreGlobalModule(previousModule, internalModule);
                 reject(userError("Multigauge could not load its WebAssembly module."));
             };
 

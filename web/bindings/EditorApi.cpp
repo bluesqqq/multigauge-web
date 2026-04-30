@@ -123,7 +123,7 @@ std::size_t mg_editor_face_count(mg::editor::EditorId editorId) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-mg::editor::Editor::Id mg_editor_face_at(mg::editor::EditorId editorId, std::size_t index) {
+mg::editor::NodeId mg_editor_face_at(mg::editor::EditorId editorId, std::size_t index) {
     try {
         return mg::editor::faceAt(editorId, index);
     } catch (...) {
@@ -150,7 +150,7 @@ const char* mg_editor_list_value_ids(mg::editor::EditorId editorId) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-bool mg_editor_has_node(mg::editor::EditorId editorId, mg::editor::Editor::Id id) {
+bool mg_editor_has_node(mg::editor::EditorId editorId, mg::editor::NodeId id) {
     try {
         return mg::editor::hasNode(editorId, id);
     } catch (...) {
@@ -159,7 +159,7 @@ bool mg_editor_has_node(mg::editor::EditorId editorId, mg::editor::Editor::Id id
 }
 
 EMSCRIPTEN_KEEPALIVE
-bool mg_editor_is_face(mg::editor::EditorId editorId, mg::editor::Editor::Id id) {
+bool mg_editor_is_face(mg::editor::EditorId editorId, mg::editor::NodeId id) {
     try {
         return mg::editor::isFace(editorId, id);
     } catch (...) {
@@ -168,7 +168,7 @@ bool mg_editor_is_face(mg::editor::EditorId editorId, mg::editor::Editor::Id id)
 }
 
 EMSCRIPTEN_KEEPALIVE
-bool mg_editor_is_element(mg::editor::EditorId editorId, mg::editor::Editor::Id id) {
+bool mg_editor_is_element(mg::editor::EditorId editorId, mg::editor::NodeId id) {
     try {
         return mg::editor::isElement(editorId, id);
     } catch (...) {
@@ -186,7 +186,7 @@ const char* mg_editor_create_face(mg::editor::EditorId editorId, const char* jso
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_remove_face(mg::editor::EditorId editorId, mg::editor::Editor::Id faceId) {
+const char* mg_editor_remove_face(mg::editor::EditorId editorId, mg::editor::NodeId faceId) {
     try {
         return toJson(mg::editor::removeFace(editorId, faceId));
     } catch (...) {
@@ -195,7 +195,7 @@ const char* mg_editor_remove_face(mg::editor::EditorId editorId, mg::editor::Edi
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_reorder_face(mg::editor::EditorId editorId, mg::editor::Editor::Id faceId, std::size_t index) {
+const char* mg_editor_reorder_face(mg::editor::EditorId editorId, mg::editor::NodeId faceId, std::size_t index) {
     try {
         return toJson(mg::editor::reorderFace(editorId, faceId, index));
     } catch (...) {
@@ -204,11 +204,11 @@ const char* mg_editor_reorder_face(mg::editor::EditorId editorId, mg::editor::Ed
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_create_element(mg::editor::EditorId editorId, mg::editor::Editor::Id parentId, const char* json) {
+const char* mg_editor_create_element(mg::editor::EditorId editorId, mg::editor::NodeId parentId, const char* json) {
     try {
         return toJson(mg::editor::createElement(
             editorId,
-            mg::editor::Editor::ElementPlacement{ parentId, mg::editor::Editor::Append },
+            mg::editor::ElementPlacement{ parentId },
             json ? std::string(json) : std::string()
         ));
     } catch (...) {
@@ -217,7 +217,7 @@ const char* mg_editor_create_element(mg::editor::EditorId editorId, mg::editor::
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_remove_element(mg::editor::EditorId editorId, mg::editor::Editor::Id elementId) {
+const char* mg_editor_remove_element(mg::editor::EditorId editorId, mg::editor::NodeId elementId) {
     try {
         return toJson(mg::editor::removeElement(editorId, elementId));
     } catch (...) {
@@ -226,7 +226,7 @@ const char* mg_editor_remove_element(mg::editor::EditorId editorId, mg::editor::
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_reorder_element(mg::editor::EditorId editorId, mg::editor::Editor::Id elementId, std::size_t index) {
+const char* mg_editor_reorder_element(mg::editor::EditorId editorId, mg::editor::NodeId elementId, std::size_t index) {
     try {
         return toJson(mg::editor::reorderElement(editorId, elementId, index));
     } catch (...) {
@@ -235,12 +235,12 @@ const char* mg_editor_reorder_element(mg::editor::EditorId editorId, mg::editor:
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_move_element(mg::editor::EditorId editorId, mg::editor::Editor::Id elementId, mg::editor::Editor::Id parentId, std::size_t index) {
+const char* mg_editor_move_element(mg::editor::EditorId editorId, mg::editor::NodeId elementId, mg::editor::NodeId parentId, std::size_t index) {
     try {
         return toJson(mg::editor::moveElement(
             editorId,
             elementId,
-            mg::editor::Editor::ElementPlacement{ parentId, index }
+            mg::editor::ElementPlacement{ parentId, index }
         ));
     } catch (...) {
         return mg::bindings::storeString(R"({"ok":false,"error":"Exception"})");
@@ -248,16 +248,16 @@ const char* mg_editor_move_element(mg::editor::EditorId editorId, mg::editor::Ed
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_replace_element_from_json(mg::editor::EditorId editorId, mg::editor::Editor::Id elementId, const char* json) {
+const char* mg_editor_replace_element_from_json(mg::editor::EditorId editorId, mg::editor::NodeId elementId, const char* json) {
     try {
-        return toJson(mg::editor::replaceElementFromJson(editorId, elementId, json ? std::string(json) : std::string()));
+        return toJson(mg::editor::replaceElement(editorId, elementId, json ? std::string(json) : std::string()));
     } catch (...) {
         return mg::bindings::storeString(R"({"ok":false,"error":"Exception"})");
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_set_property(mg::editor::EditorId editorId, mg::editor::Editor::Id id, const char* path, const char* json) {
+const char* mg_editor_set_property(mg::editor::EditorId editorId, mg::editor::NodeId id, const char* path, const char* json) {
     try {
         return toJson(mg::editor::setProperty(editorId, id, path ? std::string(path) : std::string(), json ? std::string(json) : std::string()));
     } catch (...) {
@@ -266,7 +266,7 @@ const char* mg_editor_set_property(mg::editor::EditorId editorId, mg::editor::Ed
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_get_property(mg::editor::EditorId editorId, mg::editor::Editor::Id id, const char* path) {
+const char* mg_editor_get_property(mg::editor::EditorId editorId, mg::editor::NodeId id, const char* path) {
     try {
         return toJson(mg::editor::getProperty(editorId, id, path ? std::string(path) : std::string()));
     } catch (...) {
@@ -275,7 +275,7 @@ const char* mg_editor_get_property(mg::editor::EditorId editorId, mg::editor::Ed
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_get_properties_meta(mg::editor::EditorId editorId, mg::editor::Editor::Id id, const char* path) {
+const char* mg_editor_get_properties_meta(mg::editor::EditorId editorId, mg::editor::NodeId id, const char* path) {
     try {
         return toJson(mg::editor::getPropertiesMeta(editorId, id, path ? std::string(path) : std::string()));
     } catch (...) {
@@ -284,7 +284,7 @@ const char* mg_editor_get_properties_meta(mg::editor::EditorId editorId, mg::edi
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_copy_face(mg::editor::EditorId editorId, mg::editor::Editor::Id faceId) {
+const char* mg_editor_copy_face(mg::editor::EditorId editorId, mg::editor::NodeId faceId) {
     try {
         return toJson(mg::editor::copyFace(editorId, faceId));
     } catch (...) {
@@ -293,7 +293,7 @@ const char* mg_editor_copy_face(mg::editor::EditorId editorId, mg::editor::Edito
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_cut_face(mg::editor::EditorId editorId, mg::editor::Editor::Id faceId) {
+const char* mg_editor_cut_face(mg::editor::EditorId editorId, mg::editor::NodeId faceId) {
     try {
         return toJson(mg::editor::cutFace(editorId, faceId));
     } catch (...) {
@@ -304,14 +304,14 @@ const char* mg_editor_cut_face(mg::editor::EditorId editorId, mg::editor::Editor
 EMSCRIPTEN_KEEPALIVE
 const char* mg_editor_paste_face(mg::editor::EditorId editorId, std::size_t index) {
     try {
-        return toJson(mg::editor::pasteFace(editorId, mg::editor::Editor::FacePlacement{ index }));
+        return toJson(mg::editor::pasteFace(editorId, mg::editor::FacePlacement{ index }));
     } catch (...) {
         return mg::bindings::storeString(R"({"ok":false,"error":"Exception"})");
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_copy_element(mg::editor::EditorId editorId, mg::editor::Editor::Id elementId) {
+const char* mg_editor_copy_element(mg::editor::EditorId editorId, mg::editor::NodeId elementId) {
     try {
         return toJson(mg::editor::copyElement(editorId, elementId));
     } catch (...) {
@@ -320,7 +320,7 @@ const char* mg_editor_copy_element(mg::editor::EditorId editorId, mg::editor::Ed
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_cut_element(mg::editor::EditorId editorId, mg::editor::Editor::Id elementId) {
+const char* mg_editor_cut_element(mg::editor::EditorId editorId, mg::editor::NodeId elementId) {
     try {
         return toJson(mg::editor::cutElement(editorId, elementId));
     } catch (...) {
@@ -329,11 +329,11 @@ const char* mg_editor_cut_element(mg::editor::EditorId editorId, mg::editor::Edi
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_paste_element(mg::editor::EditorId editorId, mg::editor::Editor::Id parentId, std::size_t index) {
+const char* mg_editor_paste_element(mg::editor::EditorId editorId, mg::editor::NodeId parentId, std::size_t index) {
     try {
         return toJson(mg::editor::pasteElement(
             editorId,
-            mg::editor::Editor::ElementPlacement{ parentId, index }
+            mg::editor::ElementPlacement{ parentId, index }
         ));
     } catch (...) {
         return mg::bindings::storeString(R"({"ok":false,"error":"Exception"})");
@@ -341,7 +341,7 @@ const char* mg_editor_paste_element(mg::editor::EditorId editorId, mg::editor::E
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char* mg_editor_paste_to_replace_element(mg::editor::EditorId editorId, mg::editor::Editor::Id elementId) {
+const char* mg_editor_paste_to_replace_element(mg::editor::EditorId editorId, mg::editor::NodeId elementId) {
     try {
         return toJson(mg::editor::pasteToReplaceElement(editorId, elementId));
     } catch (...) {

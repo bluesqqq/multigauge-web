@@ -122,7 +122,7 @@ bool mg_runtime_set_gauge_screen_from_file(mg::ContextId id, const char* path) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-bool mg_runtime_set_editor_screen(mg::ContextId id, mg::editor::EditorId editorId, mg::editor::Editor::Id faceId) {
+bool mg_runtime_set_editor_screen(mg::ContextId id, mg::editor::EditorId editorId, mg::editor::NodeId faceId) {
     try {
         auto* binding = findBinding(id);
         return binding ? mg::setEditorScreen(binding->runtimeContextId, editorId, faceId) : false;

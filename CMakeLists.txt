@@ -80,6 +80,9 @@ target_include_directories(multigauge_core
 
 if (EMSCRIPTEN)
   set_target_properties(multigauge_wasm PROPERTIES SUFFIX ".js")
+  set_target_properties(multigauge_wasm PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${WEB_DIST_DIR}/wasm"
+  )
 
   target_link_options(multigauge_wasm PRIVATE
     "SHELL:-sWASM=1"
@@ -93,10 +96,7 @@ if (EMSCRIPTEN)
   )
 
   add_custom_command(TARGET multigauge_wasm POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${WEB_DIST_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "$<TARGET_FILE:multigauge_wasm>"
-      "${WEB_DIST_DIR}/multigauge.js"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${WEB_DIST_DIR}/wasm"
     VERBATIM
   )
 endif()

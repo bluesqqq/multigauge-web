@@ -71,6 +71,10 @@ The generated artifacts will be written to [`web/dist/`](./web/dist/):
 - [`web/dist/multigauge.js`](./web/dist/multigauge.js)
 - [`web/dist/multigauge.wasm`](./web/dist/multigauge.wasm)
 - [`web/dist/multigauge.wasm.map`](./web/dist/multigauge.wasm.map)
+- [`web/dist/mg.js`](./web/dist/mg.js)
+- [`web/dist/wasm/multigauge.js`](./web/dist/wasm/multigauge.js)
+- [`web/dist/wasm/multigauge.wasm`](./web/dist/wasm/multigauge.wasm)
+- [`web/dist/wasm/multigauge.wasm.map`](./web/dist/wasm/multigauge.wasm.map)
 
 ## Manual Build
 

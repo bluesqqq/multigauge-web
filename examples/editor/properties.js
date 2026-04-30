@@ -5,6 +5,10 @@
     return document.getElementById("properties");
   }
 
+  function getPropertiesJsonPanel() {
+    return document.getElementById("properties-json");
+  }
+
   function normalizeColorInputValue(value) {
     if (typeof value !== "string") {
       return "#000000";
@@ -194,16 +198,19 @@
 
   function renderPropertiesPanel() {
     var panel = getPropertiesPanel();
-    if (!panel) {
+    var jsonPanel = getPropertiesJsonPanel();
+    if (!panel || !jsonPanel) {
       return;
     }
 
     panel.textContent = "";
+    jsonPanel.value = "";
 
     var editor = ns.getEditor();
     var selectedId = ns.getSelectedId();
     if (!editor || !selectedId) {
       panel.textContent = "Select an element.";
+      jsonPanel.value = "Select an element.";
       return;
     }
 
@@ -213,7 +220,15 @@
     } catch (err) {
       console.error(err);
       panel.textContent = "Could not load properties.";
+      jsonPanel.value = "Could not load properties.";
       return;
+    }
+
+    try {
+      jsonPanel.value = JSON.stringify(data, null, 2);
+    } catch (jsonErr) {
+      console.error(jsonErr);
+      jsonPanel.value = "Could not stringify properties.";
     }
 
     var heading = document.createElement("div");
